@@ -5,6 +5,7 @@ import { cwd, env } from 'process'
 
 import { runCoreSteps } from '@netlify/build'
 import { restoreConfig, updateConfig } from '@netlify/config'
+import { Option } from 'commander'
 import { get } from 'dot-prop'
 import inquirer from 'inquirer'
 import isObject from 'lodash/isObject.js'
@@ -12,9 +13,10 @@ import prettyjson from 'prettyjson'
 
 import { cancelDeploy } from '../../lib/api.mjs'
 import { getBuildOptions, runBuild } from '../../lib/build.mjs'
+import { featureFlags as edgeFunctionsFeatureFlags } from '../../lib/edge-functions/consts.mjs'
 import { normalizeFunctionsConfig } from '../../lib/functions/config.mjs'
 import { getLogMessage } from '../../lib/log.mjs'
-import { startSpinner, stopSpinner } from '../../lib/spinner.cjs'
+import { startSpinner, stopSpinner } from '../../lib/spinner.mjs'
 import {
   chalk,
   error,
@@ -29,6 +31,7 @@ import {
 } from '../../utils/command-helpers.mjs'
 import { DEFAULT_DEPLOY_TIMEOUT } from '../../utils/deploy/constants.mjs'
 import { deploySite } from '../../utils/deploy/deploy-site.mjs'
+import { getEnvelopeEnv } from '../../utils/env/index.mjs'
 import { getFunctionsManifestPath, getInternalFunctionsDir } from '../../utils/functions/index.mjs'
 import openBrowser from '../../utils/open-browser.mjs'
 import { link } from '../link/index.mjs'
@@ -409,9 +412,7 @@ const bundleEdgeFunctions = async (options) => {
   const { severityCode, success } = await runCoreSteps(['edge_functions_bundling'], {
     ...options,
     buffer: true,
-    featureFlags: {
-      edge_functions_produce_eszip: true,
-    },
+    featureFlags: edgeFunctionsFeatureFlags,
   })
 
   if (!success) {
@@ -567,7 +568,17 @@ const deploy = async (options, command) => {
     return triggerDeploy({ api, options, siteData, siteId })
   }
 
-  const { newConfig, configMutations = [] } = await handleBuild({
+  const isUsingEnvelope = siteData && siteData.use_envelope
+  // if a context is passed besides dev, we need to pull env vars from that specific context
+  if (isUsingEnvelope && options.context && options.context !== 'dev') {
+    command.netlify.cachedConfig.env = await getEnvelopeEnv({
+      api,
+      context: options.context,
+      env: command.netlify.cachedConfig.env,
+      siteInfo: siteData,
+    })
+  }
+  const { configMutations = [], newConfig } = await handleBuild({
     cachedConfig: command.netlify.cachedConfig,
     options,
   })
@@ -595,7 +606,18 @@ const deploy = async (options, command) => {
     deployFolder,
     functionsFolder,
   })
-  const siteEnv = get(siteData, 'build_settings.env')
+
+  const siteEnv = isUsingEnvelope
+    ? await getEnvelopeEnv({
+        api,
+        context: options.context,
+        env: command.netlify.cachedConfig.env,
+        raw: true,
+        scope: 'functions',
+        siteInfo: siteData,
+      })
+    : get(siteData, 'build_settings.env')
+
   const functionsConfig = normalizeFunctionsConfig({
     functionsConfig: config.functions,
     projectRoot: site.root,
@@ -727,7 +749,15 @@ Support for package.json's main field, and intrinsic index.js entrypoints are co
     .option('-d, --dir <path>', 'Specify a folder to deploy')
     .option('-f, --functions <folder>', 'Specify a functions folder to deploy')
     .option('-p, --prod', 'Deploy to production', false)
-    .option('--prodIfUnlocked', 'Deploy to production if unlocked, create a draft otherwise', false)
+    .addOption(
+      new Option(
+        '--prodIfUnlocked',
+        'Old, prefer --prod-if-unlocked. Deploy to production if unlocked, create a draft otherwise',
+      )
+        .default(false)
+        .hideHelp(true),
+    )
+    .option('--prod-if-unlocked', 'Deploy to production if unlocked, create a draft otherwise', false)
     .option(
       '--alias <name>',
       'Specifies the alias for deployment, the string at the beginning of the deploy subdomain. Useful for creating predictable deployment URLs. Avoid setting an alias string to the same value as a deployed branch. `alias` doesn’t create a branch deploy and can’t be used in conjunction with the branch subdomain feature. Maximum 37 characters.',
@@ -755,7 +785,7 @@ Support for package.json's main field, and intrinsic index.js entrypoints are co
       'netlify deploy --site my-first-site',
       'netlify deploy --prod',
       'netlify deploy --prod --open',
-      'netlify deploy --prodIfUnlocked',
+      'netlify deploy --prod-if-unlocked',
       'netlify deploy --message "A message with an $ENV_VAR"',
       'netlify deploy --auth $NETLIFY_AUTH_TOKEN',
       'netlify deploy --trigger',

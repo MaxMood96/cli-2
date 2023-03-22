@@ -1,32 +1,30 @@
-import { appendFileSync, existsSync, promises, readFileSync, writeFileSync } from 'fs'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join, sep } from 'path'
+import { dirname, join, normalize, sep } from 'path'
 import { cwd, env } from 'process'
 import { fileURLToPath } from 'url'
 
-import del from 'del'
 import execa from 'execa'
 import getPort from 'get-port'
-import verdaccio from 'verdaccio'
+import pTimeout from 'p-timeout'
+import { runServer } from 'verdaccio'
 
-// TODO: remove this once `../../src/lib/fs.js` is an esm module as well
-const rmdirRecursiveAsync = async (path) => {
-  await del(path, { force: true })
-}
+import { fileExistsAsync } from '../../src/lib/fs.mjs'
 
-const { mkdtemp } = promises
+const dir = dirname(fileURLToPath(import.meta.url))
 
-// eslint-disable-next-line no-magic-numbers
 const VERDACCIO_TIMEOUT_MILLISECONDS = 60 * 1000
 const START_PORT_RANGE = 5000
 const END_PORT_RANGE = 5000
 
 /**
  * Gets the verdaccio configuration
- * @param {string} storage The location where the artifacts are stored
  */
-const getVerdaccioConfig = (storage) => ({
-  storage,
+const getVerdaccioConfig = () => ({
+  // workaround
+  // on v5 the `self_path` still exists and will be removed in v6 of verdaccio
+  self_path: dir,
+  storage: normalize(join(dir, '../../.verdaccio-storage')),
   web: { title: 'Test Registry' },
   max_body_size: '128mb',
   // Disable creation of users this is only meant for integration testing
@@ -59,30 +57,38 @@ const getVerdaccioConfig = (storage) => ({
 })
 
 /**
+ * Start verdaccio server
+ * @returns {Promise<{ url: URL; storage: string; }>}
+ */
+const runVerdaccio = async (config, port) => {
+  const app = await runServer(config)
+
+  return new Promise((resolve, reject) => {
+    app.listen(port, 'localhost', () => {
+      resolve({ url: new URL(`http://localhost:${port}/`), storage: config.storage })
+    })
+    app.on('error', (error) => {
+      reject(error)
+    })
+  })
+}
+
+/**
  * Start verdaccio registry and store artifacts in a new temporary folder on the os
  * @returns {Promise<{ url: URL; storage: string; }>}
  */
 export const startRegistry = async () => {
+  const config = getVerdaccioConfig()
+
+  // Remove netlify-cli from the verdaccio storage because we are going to publish it in a second
+  await rm(join(config.storage, 'netlify-cli'), { force: true, recursive: true })
+
   // generate a random starting port to avoid race condition inside the promise when running a large
   // number in parallel
   const startPort = Math.floor(Math.random() * END_PORT_RANGE) + START_PORT_RANGE
   const freePort = await getPort({ host: 'localhost', port: startPort })
-  const storage = fileURLToPath(new URL('../../.verdaccio-storage', import.meta.url))
 
-  // Remove netlify-cli from the verdaccio storage because we are going to publish it in a second
-  await rmdirRecursiveAsync(join(storage, 'netlify-cli'))
-
-  return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      reject(new Error('Starting Verdaccio Timed out'))
-    }, VERDACCIO_TIMEOUT_MILLISECONDS)
-
-    verdaccio.default(getVerdaccioConfig(storage), freePort, storage, '1.0.0', 'verdaccio', (webServer, { port }) => {
-      webServer.listen(port, 'localhost', () => {
-        resolve({ url: new URL(`http://localhost:${port}/`), storage })
-      })
-    })
-  })
+  return await pTimeout(runVerdaccio(config, freePort), VERDACCIO_TIMEOUT_MILLISECONDS, 'Starting Verdaccio timed out')
 }
 
 /**
@@ -105,17 +111,17 @@ export const setup = async () => {
   /** Cleans up everything */
   const cleanup = async () => {
     // remote temp folders
-    await rmdirRecursiveAsync(workspace)
+    await rm(workspace, { force: true, recursive: true })
   }
 
   env.npm_config_registry = url
 
   try {
-    if (existsSync(npmrc)) {
-      backupNpmrc = readFileSync(npmrc, 'utf-8')
-      appendFileSync(npmrc, registryWithAuth)
+    if (await fileExistsAsync(npmrc)) {
+      backupNpmrc = await readFile(npmrc, 'utf-8')
+      await appendFile(npmrc, registryWithAuth)
     } else {
-      writeFileSync(npmrc, registryWithAuth, 'utf-8')
+      await writeFile(npmrc, registryWithAuth, 'utf-8')
     }
 
     // publish the CLI package to our registry
@@ -137,10 +143,11 @@ ${error_ instanceof Error ? error_.message : error_}`,
     )
   } finally {
     // restore .npmrc
+    // eslint-disable-next-line unicorn/prefer-ternary
     if (backupNpmrc) {
-      writeFileSync(npmrc, backupNpmrc)
+      await writeFile(npmrc, backupNpmrc)
     } else {
-      await rmdirRecursiveAsync(npmrc)
+      await rm(npmrc, { force: true, recursive: true })
     }
   }
 
