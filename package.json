@@ -230,7 +230,7 @@
     "prettier": "--ignore-path .gitignore --loglevel=warn \"{src,tools,scripts,site,tests,.github}/**/*.{mjs,cjs,js,md,yml,json,html}\" \"*.{mjs,cjs,js,yml,json,html}\" \".*.{mjs,cjs,js,yml,json,html}\" \"!CHANGELOG.md\" \"!npm-shrinkwrap.json\" \"!**/*/package-lock.json\" \"!.github/**/*.md\""
   },
   "dependencies": {
-    "@netlify/build": "^28.4.5",
+    "@netlify/build": "^29.5.5",
     "@netlify/config": "^20.0.2",
     "@netlify/edge-bundler": "^5.5.0",
     "@netlify/framework-info": "^9.5.2",
@@ -286,7 +286,7 @@
     "is-plain-obj": "^3.0.0",
     "is-wsl": "^2.2.0",
     "isexe": "^2.0.0",
-    "jsonwebtoken": "^8.5.1",
+    "jsonwebtoken": "^9.0.0",
     "jwt-decode": "^3.0.0",
     "lambda-local": "^2.0.1",
     "listr": "^0.14.3",
@@ -314,7 +314,7 @@
     "prettyjson": "^1.2.1",
     "pump": "^3.0.0",
     "raw-body": "^2.4.1",
-    "read-pkg-up": "^7.0.1",
+    "read-pkg-up": "^8.0.0",
     "semver": "^7.3.5",
     "source-map-support": "^0.5.19",
     "static-server": "^2.2.1",
